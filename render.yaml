@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: africa-travel-os-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      - key: ATI_API_KEY
+        sync: false
+      - key: ATI_AI_ENABLED
+        value: "false"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "*"
+      - key: LOG_LEVEL
+        value: "INFO"
