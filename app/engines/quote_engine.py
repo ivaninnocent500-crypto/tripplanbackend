@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.models_furniture import Bench, Cabinet, Counter, Mirror
@@ -15,6 +16,12 @@ from app.db.models_furniture import Bench, Cabinet, Counter, Mirror
 class QuoteEngine:
     def __init__(self, db: Session):
         self.db = db
+
+    def _operator_name(self, operator_id) -> str | None:
+        row = self.db.execute(
+            text("select name from tour_operators where id = :id"), {"id": operator_id},
+        ).fetchone()
+        return row[0] if row else None
 
     # ------------------------------------------------------------------
     def request_quotes(self, cabinet: Cabinet, tour_operator_ids: list[str], note: str | None) -> list[Bench]:
@@ -66,6 +73,7 @@ class QuoteEngine:
                 {
                     "bench_id": str(b.id),
                     "tour_operator_id": str(b.tour_operator_id),
+                    "operator_name": self._operator_name(b.tour_operator_id),
                     "status": b.status,
                     "quote": (
                         {
@@ -88,6 +96,7 @@ class QuoteEngine:
             rows.append({
                 "bench_id": str(b.id),
                 "tour_operator_id": str(b.tour_operator_id),
+                "operator_name": self._operator_name(b.tour_operator_id),
                 "price_per_person": float(c.price_per_person),
                 "accommodation": c.accommodation_summary,
                 "activities": c.activities_summary,
@@ -104,3 +113,4 @@ class QuoteEngine:
 
         return {"quotes": rows, "best_value_bench_id": best_value["bench_id"] if best_value else None,
                 "best_fit_bench_id": best_fit["bench_id"] if best_fit else None}
+

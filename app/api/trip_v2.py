@@ -43,6 +43,17 @@ def _get_cabinet_or_404(db: Session, cabinet_id: str) -> Cabinet:
     return cabinet
 
 
+def _operator_summary(db: Session, tour_operator_id) -> dict:
+    row = db.execute(
+        text("select name, years_in_operation, headquarters_country, verification_status "
+             "from tour_operators where id = :id"),
+        {"id": tour_operator_id},
+    ).fetchone()
+    if not row:
+        return {"name": None, "years_in_operation": None, "headquarters_country": None, "verification_status": None}
+    return {"name": row[0], "years_in_operation": row[1], "headquarters_country": row[2], "verification_status": row[3]}
+
+
 # ---------------------------------------------------------------------
 @router.post("/generate")
 def generate_trip(request: dict, db: Session = Depends(get_supabase_db), _=Depends(require_api_key)):
@@ -124,18 +135,23 @@ def match_operators(cabinet_id: str, db: Session = Depends(get_supabase_db), _=D
     cabinet.status = "matching"
     db.add(cabinet)
     db.commit()
-    return {
-        "degraded": match_result.degraded,
-        "matches": [
-            {
-                "tour_operator_id": str(s.tour_operator_id),
-                "trip_match_pct": s.trip_match_pct,
-                "badge": s.badge,
-                "strengths": s.strengths,
-                "estimated_price_pp": float(s.estimated_price_pp) if s.estimated_price_pp else None,
-            } for s in match_result.value
-        ],
-    }
+
+    matches = []
+    for s in match_result.value:
+        summary = _operator_summary(db, s.tour_operator_id)
+        matches.append({
+            "tour_operator_id": str(s.tour_operator_id),
+            "operator_name": summary["name"],
+            "years_in_operation": summary["years_in_operation"],
+            "headquarters_country": summary["headquarters_country"],
+            "verification_status": summary["verification_status"],
+            "trip_match_pct": s.trip_match_pct,
+            "badge": s.badge,
+            "strengths": s.strengths,
+            "estimated_price_pp": float(s.estimated_price_pp) if s.estimated_price_pp else None,
+        })
+
+    return {"degraded": match_result.degraded, "matches": matches}
 
 
 # ---------------------------------------------------------------------
