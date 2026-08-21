@@ -3,13 +3,13 @@ OperatorMatchEngine (v2) — replaces a flat "operator.rating" sort with an
 explainable, reproducible per-trip match score, persisted as `stools`.
 
 Score is a weighted blend of sub-scores, each derived from real data:
-  - itinerary_fit:      does the operator serve every destination on the route?
-  - experience_fit:     overlap between requested travel_style and operator specialties
-  - accommodation_fit:  does operator's typical tier match requested budget_tier?
+  - itinerary_fit: does the operator serve every destination on the route?
+  - experience_fit: overlap between requested travel_style and operator specialties
+  - accommodation_fit: does operator's typical tier match requested budget_tier?
   - destination_coverage: % of route destinations the operator is active in
-  - service:            derived from review_count (more history = more signal)
-  - trust:              verification_status + years_in_operation
-  - value:              inverse of estimated price vs the cohort average
+  - service: derived from review_count (more history = more signal)
+  - trust: verification_status + years_in_operation
+  - value: inverse of estimated price vs the cohort average
 
 This mirrors the "Trip / Required capabilities / Operator capabilities /
 MATCH ENGINE" structure from the planning doc.
@@ -39,6 +39,16 @@ class OperatorMatchEngine:
         self.db = db
 
     def match(self, cabinet: Cabinet, limit: int = 3) -> list[Stool]:
+        # Idempotent: clear any previous matches for this cabinet before
+        # computing fresh ones. Without this, calling match() twice for
+        # the same cabinet (a client retry after a slow/timed-out first
+        # request that actually succeeded server-side, tapping "Find my
+        # best safari partners" again, etc.) violates the
+        # unique(cabinet_id, tour_operator_id) constraint on `stools`
+        # and crashes the request instead of just recomputing.
+        self.db.query(Stool).filter(Stool.cabinet_id == cabinet.id).delete()
+        self.db.flush()
+
         route = cabinet.route_destination_ids or []
         candidates = self.db.execute(
             text(
@@ -66,12 +76,12 @@ class OperatorMatchEngine:
             ).scalar()
             coverage_pct = int(100 * (coverage_row or 0) / max(1, len(route)))
 
-            itinerary_fit = coverage_pct  # simple proxy: full coverage = strong itinerary fit
+            itinerary_fit = coverage_pct # simple proxy: full coverage = strong itinerary fit
             experience_fit = min(100, int((rating or 4.0) * 20))
             accommodation_fit = 90 if cabinet.budget_tier == "luxury" else 80
             service = min(100, 60 + int((review_count or 0) / 5))
             trust = min(100, 60 + int((years or 0) * 2) + (10 if verification == "verified" else 0))
-            value = 80  # placeholder until real pricing feed exists — see gap notes
+            value = 80 # placeholder until real pricing feed exists — see gap notes
 
             trip_match = round(
                 itinerary_fit * WEIGHTS["itinerary_fit"]
@@ -128,3 +138,4 @@ class OperatorMatchEngine:
         if s["trust"] >= 85:
             out.append("Verified operator with a strong track record")
         return out or ["Fits the core requirements of your trip"]
+
