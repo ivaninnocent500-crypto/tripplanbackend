@@ -51,6 +51,20 @@ def _build_supabase_engine() -> Engine:
     if pool_class is QueuePool:
         kwargs.update(pool_size=5, max_overflow=10, pool_recycle=1800)
 
+    if is_pooled:
+        # Supabase's pooler (Supavisor, transaction mode — the :6543 URL)
+        # hands each transaction to whichever backend Postgres connection
+        # is free, not necessarily the same one each time. psycopg3
+        # automatically prepares repeated statements server-side under
+        # auto-generated names like "_pg3_0" — if two unrelated requests
+        # land on the same backend connection, the second prepare
+        # collides with one already registered by the first, raising
+        # psycopg.errors.DuplicatePreparedStatement. Disabling
+        # server-side prepare for pooled connections avoids this
+        # entirely; it costs a small amount of query-planning overhead
+        # per call, which is the right tradeoff against random 500s.
+        kwargs["connect_args"] = {"prepare_threshold": None}
+
     try:
         return create_engine(url, poolclass=pool_class, **kwargs)
     except Exception as exc:
@@ -151,3 +165,4 @@ def check_legacy_connection() -> bool:
     except Exception as exc:
         logger.error("❌ Legacy DB connection failed: %s", exc, exc_info=True)
         return False
+
