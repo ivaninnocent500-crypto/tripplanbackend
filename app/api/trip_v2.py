@@ -7,7 +7,11 @@ confirm. One endpoint per screen, all backed by persisted Cabinet state
 Each engine call is wrapped in call_engine() (app/engines/resilience.py),
 same pattern your original orchestrator.py used: failures degrade
 gracefully into an EngineResult with .degraded=True rather than crashing
-the whole request. RulesEngine.evaluate_rules() runs first — it currently
+the whole request. Every call_engine(...) here passes db=db so a caught
+engine failure rolls back the session — without that, a failed insert
+mid-engine leaves the transaction aborted and every subsequent query in
+the same request (including the route's own db.commit()) fails too,
+turning one soft "degraded" result into a hard 500. RulesEngine.evaluate_rules() runs first — it currently
 always returns {"status": "success", "validated": True} (a stub), so this
 just logs a warning if that ever changes rather than blocking requests.
 """
@@ -70,7 +74,7 @@ def generate_trip(request: dict, db: Session = Depends(get_supabase_db), _=Depen
     build_result = call_engine(
         "ItineraryPlanningEngine",
         lambda: ItineraryPlanningEngine(db).build(request, ordered_ids),
-        fallback=None,
+        fallback=None, db=db,
     )
     if build_result.value is None:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Trip generation failed unexpectedly.")
@@ -80,13 +84,13 @@ def generate_trip(request: dict, db: Session = Depends(get_supabase_db), _=Depen
     validation_result = call_engine(
         "ValidationEngine",
         lambda: ValidationEngine(db).validate(cabinet),
-        fallback={"status": "unknown", "issue_count": 0, "errors": [], "warnings": ["Validation engine unavailable"]},
+        fallback={"status": "unknown", "issue_count": 0, "errors": [], "warnings": ["Validation engine unavailable"]}, db=db,
     )
 
     explanation_result = call_engine(
         "ExplanationEngine",
         lambda: ExplanationEngine().explain(cabinet),
-        fallback={"facts": [], "generated_by": "unavailable"},
+        fallback={"facts": [], "generated_by": "unavailable"}, db=db,
     )
 
     db.commit()
@@ -108,7 +112,7 @@ def generate_trip(request: dict, db: Session = Depends(get_supabase_db), _=Depen
 def get_trip(cabinet_id: str, db: Session = Depends(get_supabase_db), _=Depends(require_api_key)):
     cabinet = _get_cabinet_or_404(db, cabinet_id)
     explanation_result = call_engine(
-        "ExplanationEngine", lambda: ExplanationEngine().explain(cabinet), fallback={"facts": []},
+        "ExplanationEngine", lambda: ExplanationEngine().explain(cabinet), fallback={"facts": []}, db=db,
     )
     return {
         "cabinet_id": str(cabinet.id),
@@ -130,7 +134,7 @@ def get_trip(cabinet_id: str, db: Session = Depends(get_supabase_db), _=Depends(
 def match_operators(cabinet_id: str, db: Session = Depends(get_supabase_db), _=Depends(require_api_key)):
     cabinet = _get_cabinet_or_404(db, cabinet_id)
     match_result = call_engine(
-        "OperatorMatchEngine", lambda: OperatorMatchEngine(db).match(cabinet), fallback=[],
+        "OperatorMatchEngine", lambda: OperatorMatchEngine(db).match(cabinet), fallback=[], db=db,
     )
     cabinet.status = "matching"
     db.add(cabinet)
@@ -161,7 +165,7 @@ def request_quotes(cabinet_id: str, body: dict, db: Session = Depends(get_supaba
     result = call_engine(
         "QuoteEngine.request_quotes",
         lambda: QuoteEngine(db).request_quotes(cabinet, body["tour_operator_ids"], body.get("note")),
-        fallback=[],
+        fallback=[], db=db,
     )
     db.commit()
     return {"degraded": result.degraded, "benches": [str(b.id) for b in result.value], "status": "request_sent"}
@@ -172,7 +176,7 @@ def track_quotes(cabinet_id: str, db: Session = Depends(get_supabase_db), _=Depe
     cabinet = _get_cabinet_or_404(db, cabinet_id)
     result = call_engine(
         "QuoteEngine.tracking_summary", lambda: QuoteEngine(db).tracking_summary(cabinet),
-        fallback={"requests_sent": 0, "quotes_received": 0, "awaiting_response": 0, "benches": []},
+        fallback={"requests_sent": 0, "quotes_received": 0, "awaiting_response": 0, "benches": []}, db=db,
     )
     return result.value
 
@@ -182,7 +186,7 @@ def compare_quotes(cabinet_id: str, db: Session = Depends(get_supabase_db), _=De
     cabinet = _get_cabinet_or_404(db, cabinet_id)
     result = call_engine(
         "QuoteEngine.compare", lambda: QuoteEngine(db).compare(cabinet),
-        fallback={"quotes": [], "best_value_bench_id": None, "best_fit_bench_id": None},
+        fallback={"quotes": [], "best_value_bench_id": None, "best_fit_bench_id": None}, db=db,
     )
     return result.value
 
@@ -196,7 +200,7 @@ def book_trip(cabinet_id: str, body: dict, db: Session = Depends(get_supabase_db
         raise HTTPException(404, "Quote not found")
 
     result = call_engine(
-        "BookingEngine.create_booking", lambda: BookingEngine(db).create_booking(cabinet, counter), fallback=None,
+        "BookingEngine.create_booking", lambda: BookingEngine(db).create_booking(cabinet, counter), fallback=None, db=db,
     )
     if result.value is None:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Booking failed unexpectedly.")
@@ -212,7 +216,7 @@ def confirm_booking(wardrobe_id: str, db: Session = Depends(get_supabase_db), _=
         raise HTTPException(404, "Booking not found")
 
     result = call_engine(
-        "BookingEngine.confirm_booking", lambda: BookingEngine(db).confirm_booking(wardrobe), fallback=None,
+        "BookingEngine.confirm_booking", lambda: BookingEngine(db).confirm_booking(wardrobe), fallback=None, db=db,
     )
     if result.value is None:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Confirmation failed unexpectedly.")
@@ -279,3 +283,4 @@ def _day_to_dict(shelf) -> dict:
         "transport": shelf.armrests[0].description if shelf.armrests else None,
         "meals": [t.meal_type for t in shelf.trays if t.included],
     }
+
