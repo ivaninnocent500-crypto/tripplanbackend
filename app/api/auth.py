@@ -1,11 +1,17 @@
 """
-Simple shared-secret auth: verifies the X-Api-Key header against
-ATI_API_KEY from the environment (see .env.example).
+require_ops_api_key — a SECOND, separate shared secret from the
+customer-facing X-Api-Key (require_api_key in app/api/auth.py).
 
-This is intentionally minimal — a single shared key for the Android app,
-not per-user auth. If per-user auth (Supabase JWT) is needed later, this
-is the one place to swap it out; every route depends on `require_api_key`
-rather than checking the header itself, so the change is contained here.
+Why separate: the record-quote endpoint (trip_v2_ops_and_docs_routes.py)
+lets its caller set an arbitrary price on someone else's trip and
+trigger a customer-facing "your quote is ready" email. That must never
+be reachable with the same key that ships inside the Android app's
+BuildConfig — if the customer-facing key leaked (decompiled APK, log
+capture, whatever), an attacker could not use it to inject fake quotes.
+
+Set ATI_OPS_API_KEY in Render's environment (distinct from ATI_API_KEY)
+and give it only to your ops tooling / admin dashboard / email-parsing
+webhook — never to the mobile app.
 """
 from __future__ import annotations
 
@@ -15,21 +21,18 @@ import secrets
 from fastapi import Header, HTTPException, status
 
 
-def require_api_key(x_api_key: str | None = Header(default=None, alias="X-Api-Key")) -> None:
-    expected = os.environ.get("ATI_API_KEY")
+def require_ops_api_key(x_ops_api_key: str | None = Header(default=None, alias="X-Ops-Api-Key")) -> None:
+    expected = os.environ.get("ATI_OPS_API_KEY")
 
     if not expected:
-        # Fail closed: an unset ATI_API_KEY on the server is a
-        # deployment/config error, not "no auth required". Silently
-        # allowing all requests through because the env var is missing
-        # would be a much worse failure mode than a loud 500.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server misconfiguration: ATI_API_KEY is not set.",
+            detail="Server misconfiguration: ATI_OPS_API_KEY is not set.",
         )
 
-    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
+    if not x_ops_api_key or not secrets.compare_digest(x_ops_api_key, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid X-Api-Key header.",
+            detail="Missing or invalid X-Ops-Api-Key header.",
         )
+
