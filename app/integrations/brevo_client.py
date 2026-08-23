@@ -40,9 +40,8 @@ SENDER_NAME = os.environ.get("ATI_SENDER_NAME", "Africa Travel OS")
 
 
 class BrevoNotConfiguredError(RuntimeError):
-    """Raised when BREVO_API_KEY is missing — callers should catch this
-    via is_available() rather than let it bubble into a user-facing 500."""
-
+    """Raised when BREVO_API_KEY is missing — callers should catch this
+    via is_available() rather than let it bubble into a user-facing 500."""
 
 class BrevoEmailClient:
     def __init__(self):
